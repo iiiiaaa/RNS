@@ -215,6 +215,18 @@ def mifgsm(model, x, y, loss_fn, epsilon=epsilon, alpha=alpha, num_iter=10, deca
 
 
 def mifgsm_noisy(model, x, y, loss_fn, epsilon=epsilon, alpha=alpha, num_iter=10, decay=1.0, beta=1.5, N=5):
+    if N <= 0:
+        return mifgsm(
+            model,
+            x,
+            y,
+            loss_fn,
+            epsilon=epsilon,
+            alpha=alpha,
+            num_iter=num_iter,
+            decay=decay
+        )
+
     x_adv = x.detach().clone()
     momentum = torch.zeros_like(x).detach().to(device)
     for i in range(num_iter):
