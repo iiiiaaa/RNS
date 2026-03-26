@@ -225,10 +225,18 @@ def batch_testing():
     # mifgsm_noisy(beta=0.5,N=5)
     # current_adv_dir = './resnet56_cifar10_mifgsm_noisy(beta=0.5,N=5)'
     # current_adv_dir = './sepreresnet110_cifar10_mifgsm_noisy(beta=0.5,N=5)'
-    current_adv_dir = './seresnet20_cifar10_mifgsm_noisy(beta=0.5,N=5)'
+    # current_adv_dir = './seresnet20_cifar10_mifgsm_noisy(beta=0.5,N=5)'
     # current_adv_dir = './densenet40_k12_cifar10_mifgsm_noisy(beta=0.5,N=5)'
     # current_adv_dir = './ror3_110_cifar10_mifgsm_noisy(beta=0.5,N=5)'
     # current_adv_dir = './diapreresnet56_cifar10_mifgsm_noisy(beta=0.5,N=5)'
+
+    # mifgsm_noisy(beta=1,N=5)
+    # current_adv_dir = './resnet56_cifar10_mifgsm_noisy(beta=1,N=5)'
+    # current_adv_dir = './sepreresnet110_cifar10_mifgsm_noisy(beta=1,N=5)'
+    # current_adv_dir = './seresnet20_cifar10_mifgsm_noisy(beta=1,N=5)'
+    # current_adv_dir = './densenet40_k12_cifar10_mifgsm_noisy(beta=1,N=5)'
+    # current_adv_dir = './ror3_110_cifar10_mifgsm_noisy(beta=1,N=5)'
+    # current_adv_dir = './diapreresnet56_cifar10_mifgsm_noisy(beta=1,N=5)'
 
     # mifgsm_noisy(beta=1.5,N=5)
     # current_adv_dir = './resnet56_cifar10_mifgsm_noisy(beta=1.5,N=5)'
@@ -246,13 +254,38 @@ def batch_testing():
     # current_adv_dir = './ror3_110_cifar10_mifgsm_noisy(beta=2.0,N=5)'
     # current_adv_dir = './diapreresnet56_cifar10_mifgsm_noisy(beta=2.0,N=5)'
 
+    # mifgsm_noisy(beta=2.5,N=5)
+    # current_adv_dir = './resnet56_cifar10_mifgsm_noisy(beta=2.5,N=5)'
+    # current_adv_dir = './sepreresnet110_cifar10_mifgsm_noisy(beta=2.5,N=5)'
+    # current_adv_dir = './seresnet20_cifar10_mifgsm_noisy(beta=2.5,N=5)'
+    # current_adv_dir = './densenet40_k12_cifar10_mifgsm_noisy(beta=2.5,N=5)'
+    # current_adv_dir = './ror3_110_cifar10_mifgsm_noisy(beta=2.5,N=5)'
+    # current_adv_dir = './diapreresnet56_cifar10_mifgsm_noisy(beta=2.5,N=5)'
 
+    # mifgsm_noisy(beta=3,N=5)
+    # current_adv_dir = './resnet56_cifar10_mifgsm_noisy(beta=3,N=5)'
+    # current_adv_dir = './sepreresnet110_cifar10_mifgsm_noisy(beta=3,N=5)'
+    # current_adv_dir = './seresnet20_cifar10_mifgsm_noisy(beta=3,N=5)'
+    # current_adv_dir = './densenet40_k12_cifar10_mifgsm_noisy(beta=3,N=5)'
+    # current_adv_dir = './ror3_110_cifar10_mifgsm_noisy(beta=3,N=5)'
+    # current_adv_dir = './diapreresnet56_cifar10_mifgsm_noisy(beta=3,N=5)'
+
+    current_adv_dirs = [
+        './resnet56_cifar10_mifgsm_noisy(beta=3,N=5)',
+        './sepreresnet110_cifar10_mifgsm_noisy(beta=3,N=5)',
+        './seresnet20_cifar10_mifgsm_noisy(beta=3,N=5)',
+        './densenet40_k12_cifar10_mifgsm_noisy(beta=3,N=5)',
+        './ror3_110_cifar10_mifgsm_noisy(beta=3,N=5)',
+        './diapreresnet56_cifar10_mifgsm_noisy(beta=3,N=5)',
+    ]
 
     # 3. 测试
-    evaluate_transferability(
-        adv_image_dir=current_adv_dir,
-        target_model_list=target_models
-    )
+    for current_adv_dir in current_adv_dirs:
+        print(f"\n====== 开始测试: {current_adv_dir} ======")
+        evaluate_transferability(
+            adv_image_dir=current_adv_dir,
+            target_model_list=target_models
+        )
 
 
 # ==========================================
@@ -434,10 +467,16 @@ if __name__ == '__main__':
     # batch_run_attacks(pgd, 'pgd')  # pgd
     # batch_run_attacks(vmi_fgsm, 'vmi_fgsm')  # vmi_fgsm
 
+    # noisy_attack_func = partial(mifgsm_noisy, beta=1, N=5)
+    # batch_run_attacks(noisy_attack_func, 'mifgsm_noisy(beta=1,N=5)')
+
     # noisy_attack_func = partial(mifgsm_noisy, beta=2.5, N=5)
     # batch_run_attacks(noisy_attack_func, 'mifgsm_noisy(beta=1.5,N=5)')
     # batch_run_attacks(noisy_attack_func, 'mifgsm_noisy(beta=2.0,N=5)')
     # batch_run_attacks(noisy_attack_func, 'mifgsm_noisy(beta=2.5,N=5)')
+
+    # noisy_attack_func = partial(mifgsm_noisy, beta=3, N=5)
+    # batch_run_attacks(noisy_attack_func, 'mifgsm_noisy(beta=3,N=5)')
 
     # --- 批量测试 ---
     batch_testing()
