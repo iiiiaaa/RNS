@@ -2,9 +2,9 @@ import os
 
 import torch.nn as nn
 from torch.utils.data import DataLoader
-from noise import device, ptcv_get_model, fgsm_noisy, AdvDataset, transform, \
-    fgsm, ifgsm, ifgsm_noisy, mifgsm, mifgsm_noisy, ensembleNet, epoch_benign, gen_adv_examples, create_dir, batch_size, \
-    nifgsm, gra, pgd
+from noise import device, ptcv_get_model, AdvDataset, transform, \
+    fgsm, ifgsm, mifgsm, mifgsm_noisy, epoch_benign, gen_adv_examples, create_dir, batch_size, \
+    nifgsm, gra, pgd, ti, vmi
 from pytorchcv.model_provider import get_model as ptcv_get_model
 from functools import partial
 
@@ -339,6 +339,20 @@ def batch_testing():
         './densenet40_k12_cifar10_mifgsm',
         './ror3_110_cifar10_mifgsm',
         './diapreresnet56_cifar10_mifgsm',
+
+        './resnet56_cifar10_ti',
+        './sepreresnet110_cifar10_ti',
+        './seresnet20_cifar10_ti',
+        './densenet40_k12_cifar10_ti',
+        './ror3_110_cifar10_ti',
+        './diapreresnet56_cifar10_ti',
+
+        './resnet56_cifar10_vmi',
+        './sepreresnet110_cifar10_vmi',
+        './seresnet20_cifar10_vmi',
+        './densenet40_k12_cifar10_vmi',
+        './ror3_110_cifar10_vmi',
+        './diapreresnet56_cifar10_vmi',
     ]
 
     # 3. 测试
@@ -348,168 +362,6 @@ def batch_testing():
             adv_image_dir=current_adv_dir,
             target_model_list=target_models
         )
-
-
-# ==========================================
-# 集成攻击批量生成对抗样本
-# ==========================================
-def run_ensemble_attack_pipeline(model_names_list, ensemble_alias, attack_func, attack_name, data_root='./data'):
-    """
-    集成对抗样本生成流水线
-
-    Args:
-        model_names_list (list): 组成集成的模型名称列表 (e.g., ['resnet56_cifar10', 'vgg16...'])
-        ensemble_alias (str): 集成模型的别名，用于文件夹命名 (e.g., 'Ensemble-6')
-        attack_func (function): 攻击算法函数 (e.g., mifgsm)
-        attack_name (str): 攻击算法名称 (e.g., 'mifgsm_noisy')
-        data_root (str): 数据集根目录
-    """
-
-    # --- 1. 准备路径名称 ---
-    # 文件夹格式通常为: 集成名_攻击方法 (例如: Ensemble-6_mifgsm)
-    save_folder_name = f"{ensemble_alias}_{attack_name}"
-    output_dir = os.path.join(os.path.dirname(data_root), save_folder_name)
-
-    # 检查是否已经存在，避免重复跑
-    if os.path.exists(output_dir):
-        print(f"[提示] 输出目录已存在: {output_dir}，跳过或请手动删除。")
-        # return # 如果不想覆盖可以取消注释
-
-    # --- 2. 加载数据 ---
-    print("1. [集成] 正在加载数据...")
-    adv_set = AdvDataset(data_root, transform=transform)
-    adv_names = adv_set.__getname__()
-    adv_loader = DataLoader(adv_set, batch_size=batch_size, shuffle=False)
-
-    # --- 3. 加载集成模型 ---
-    print(f"2. [集成] 正在构建集成模型 (包含 {len(model_names_list)} 个子模型)...")
-    print(f"   模型列表: {model_names_list}")
-
-    # 初始化你的 ensembleNet (确保 ensembleNet 类已定义)
-    model = ensembleNet(model_names_list).to(device)
-    model.eval()  # 必须开启 eval 模式
-
-    # 为了防止显存溢出 (OOM)，如果模型很多，可以考虑在此处 torch.no_grad() 上下文外层包裹
-    # 攻击需要反向传播，所以 gen_adv_examples 内部必须允许梯度
-
-    loss_fn = nn.CrossEntropyLoss()
-
-    # --- 4. 生成对抗样本 ---
-    print(f"3. [集成] 正在执行攻击算法: {attack_name} ...")
-
-    # 将集成模型当做一个普通模型传入
-    adv_examples = gen_adv_examples(model, adv_loader, attack_func, loss_fn)
-
-    # --- 5. 保存结果 ---
-    print(f"4. [集成] 正在保存结果到: {save_folder_name}")
-    create_dir(data_root, output_dir, adv_examples, adv_names)
-    print("====== 集成攻击生成完毕 ======\n")
-
-
-# ==========================================
-# 批量运行集成攻击
-# ==========================================
-def batch_run_ensemble_attacks(attack_func, attack_name):
-    """
-    配置并运行集成攻击
-    """
-
-    # 白盒模型列表
-    all_models = [
-        'resnet56_cifar10',
-        'sepreresnet110_cifar10',
-        'seresnet20_cifar10',
-        'densenet40_k12_cifar10',
-        'ror3_110_cifar10',
-        'diapreresnet56_cifar10'
-    ]
-
-    print(f"开始批量运行集成攻击: {attack_name}")
-
-    # --- 场景 使用所有 6 个模型进行集成 ---
-    """
-    # 文件夹名结果示例: Ensemble-All_mifgsm
-    run_ensemble_attack_pipeline(
-        model_names_list=all_models,
-        ensemble_alias="Ensemble-All",  # 自定义文件夹前缀
-        attack_func=attack_func,
-        attack_name=attack_name
-    )
-    """
-
-    # --- 留一法 生成(5个模型集成，攻击第6个) ---
-    for hold_out_model in all_models:
-        # 创建一个不包含当前 hold_out_model 的列表
-        source_models = [m for m in all_models if m != hold_out_model]
-
-        # 命名示例: Ensemble-Minus-ResNet56
-        # 我们可以简化命名，比如 "Ens-Holdout-0", "Ens-Holdout-1"
-        alias = f"Ens-Holdout-{hold_out_model.split('_')[0]}"
-
-        print(f"正在处理 Hold-out 集成: 排除 {hold_out_model}")
-
-        run_ensemble_attack_pipeline(
-            model_names_list=source_models,
-            ensemble_alias=alias,
-            attack_func=attack_func,
-            attack_name=attack_name
-        )
-
-    print("所有集成任务处理完毕。")
-
-
-# 测试集成样本的迁移性
-def batch_testing_ensemble():
-
-    target_models = [
-        'resnet56_cifar10',
-        'sepreresnet110_cifar10',
-        'seresnet20_cifar10',
-        'densenet40_k12_cifar10',
-        'ror3_110_cifar10',
-        'diapreresnet56_cifar10'
-    ]
-
-    # 需要测试的集成样本目录
-    # ensemble_adv_dir = './Ens-Holdout-resnet56_mifgsm'
-    # ensemble_adv_dir = 'Ens-Holdout-sepreresnet110_mifgsm'
-    # ensemble_adv_dir = 'Ens-Holdout-seresnet20_mifgsm'
-    # ensemble_adv_dir = './Ens-Holdout-densenet40_mifgsm'
-    # ensemble_adv_dir = 'Ens-Holdout-ror3_mifgsm'
-    # ensemble_adv_dir = 'Ens-Holdout-diapreresnet56_mifgsm'
-
-    # ensemble_adv_dir = './Ens-Holdout-resnet56_mifgsm_noisy(0.1)'
-    # ensemble_adv_dir = 'Ens-Holdout-sepreresnet110_mifgsm_noisy(0.1)'
-    # ensemble_adv_dir = 'Ens-Holdout-seresnet20_mifgsm_noisy(0.1)'
-    # ensemble_adv_dir = './Ens-Holdout-densenet40_mifgsm_noisy(0.1)'
-    # ensemble_adv_dir = 'Ens-Holdout-ror3_mifgsm_noisy(0.1)'
-    # ensemble_adv_dir = 'Ens-Holdout-diapreresnet56_mifgsm_noisy(0.1)'
-
-    # ensemble_adv_dir = './Ens-Holdout-resnet56_mifgsm_noisy(0.2)'
-    # ensemble_adv_dir = 'Ens-Holdout-sepreresnet110_mifgsm_noisy(0.2)'
-    # ensemble_adv_dir = 'Ens-Holdout-seresnet20_mifgsm_noisy(0.2)'
-    # ensemble_adv_dir = './Ens-Holdout-densenet40_mifgsm_noisy(0.2)'
-    # ensemble_adv_dir = 'Ens-Holdout-ror3_mifgsm_noisy(0.2)'
-    ensemble_adv_dir = 'Ens-Holdout-diapreresnet56_mifgsm_noisy(0.2)'
-
-    # ensemble_adv_dir = './Ens-Holdout-resnet56_mifgsm_noisy(0.3)'
-    # ensemble_adv_dir = 'Ens-Holdout-sepreresnet110_mifgsm_noisy(0.3)'
-    # ensemble_adv_dir = 'Ens-Holdout-seresnet20_mifgsm_noisy(0.3)'
-    # ensemble_adv_dir = './Ens-Holdout-densenet40_mifgsm_noisy(0.3)'
-    # ensemble_adv_dir = 'Ens-Holdout-ror3_mifgsm_noisy(0.3)'
-    # ensemble_adv_dir = 'Ens-Holdout-diapreresnet56_mifgsm_noisy(0.3)'
-
-    # ensemble_adv_dir = './Ens-Holdout-resnet56_mifgsm_noisy(0.4)'
-    # ensemble_adv_dir = 'Ens-Holdout-sepreresnet110_mifgsm_noisy(0.4)'
-    # ensemble_adv_dir = 'Ens-Holdout-seresnet20_mifgsm_noisy(0.4)'
-    # ensemble_adv_dir = './Ens-Holdout-densenet40_mifgsm_noisy(0.4)'
-    # ensemble_adv_dir = 'Ens-Holdout-ror3_mifgsm_noisy(0.4)'
-    # ensemble_adv_dir = 'Ens-Holdout-diapreresnet56_mifgsm_noisy(0.4)'
-
-    evaluate_transferability(
-        adv_image_dir=ensemble_adv_dir,
-        target_model_list=target_models
-    )
 
 
 if __name__ == '__main__':
@@ -526,8 +378,9 @@ if __name__ == '__main__':
     # batch_run_attacks(mifgsm_noisy, 'mifgsm_noisy(0.3)')  # mifgsm-noisy(0.3)
     # batch_run_attacks(nifgsm, 'nifgsm')  # nifgsm
     # batch_run_attacks(gra, 'gra')  # gra
+    # batch_run_attacks(ti, 'ti')  # ti
     # batch_run_attacks(pgd, 'pgd')  # pgd
-    # batch_run_attacks(vmi_fgsm, 'vmi_fgsm')  # vmi_fgsm
+    # batch_run_attacks(vmi, 'vmi')  # vmi
 
     # noisy_attack_func = partial(mifgsm_noisy, beta=1, N=5)
     # batch_run_attacks(noisy_attack_func, 'mifgsm_noisy(beta=1,N=5)')
@@ -561,13 +414,4 @@ if __name__ == '__main__':
     # --- 批量测试 ---
     batch_testing()
 
-    # --- 批量生成集成对抗样本 ---
-    # noisy_attack_func = partial(mifgsm_noisy, noise_scale=0.2)
-    # batch_run_ensemble_attacks(noisy_attack_func, "mifgsm_noisy(0.1)")
-    # batch_run_ensemble_attacks(noisy_attack_func, "mifgsm_noisy(0.2)")
-    # batch_run_ensemble_attacks(noisy_attack_func, "mifgsm_noisy(0.3)")
-    # batch_run_ensemble_attacks(noisy_attack_func, "mifgsm_noisy(0.4)")
-    # batch_run_ensemble_attacks(mifgsm, "mifgsm")
 
-    # --- 批量测试(集成测试) ---
-    # batch_testing_ensemble()

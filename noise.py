@@ -7,6 +7,7 @@ import numpy as np
 from PIL import Image
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 from torch.utils.data import Dataset, DataLoader
 from torchvision.transforms import transforms
 from pytorchcv.model_provider import get_model as ptcv_get_model
@@ -43,8 +44,6 @@ mean = torch.tensor(cifar_10_mean).to(device).view(3, 1, 1)
 std = torch.tensor(cifar_10_std).to(device).view(3, 1, 1)
 
 # 攻击参数
-
-
 epsilon = 8 / 255 / 0.2
 alpha = 0.8 / 255 / 0.2
 
@@ -52,6 +51,22 @@ transform = transforms.Compose([
     transforms.ToTensor(),
     transforms.Normalize(cifar_10_mean, cifar_10_std)
 ])
+
+
+def gkern(kernlen=5, nsig=3):
+    x = np.linspace(-nsig, nsig, kernlen, dtype=np.float32)
+    kern1d = np.exp(-0.5 * np.square(x))
+    kernel_raw = np.outer(kern1d, kern1d)
+    return kernel_raw / kernel_raw.sum()
+
+
+def ti_smooth(grad_in, kernel_size=5):
+    kernel = gkern(kernel_size, 3).astype(np.float32)
+    gaussian_kernel = np.stack([kernel, kernel, kernel])
+    gaussian_kernel = np.expand_dims(gaussian_kernel, 1)
+    gaussian_kernel = torch.from_numpy(gaussian_kernel).to(grad_in.device)
+    padding = kernel_size // 2
+    return F.conv2d(grad_in, gaussian_kernel, bias=None, stride=1, padding=padding, groups=3)
 
 
 # ==========================================
@@ -88,47 +103,12 @@ class AdvDataset(Dataset):
     def __len__(self):
         return len(self.images)
 
-
-# ==========================================
-# 集成模型 (ensembleNet 类)
-# ==========================================
-class ensembleNet(nn.Module):
-    def __init__(self, model_names):
-        super().__init__()
-        # 加载所有指定的模型
-        self.models = nn.ModuleList([ptcv_get_model(name, pretrained=True) for name in model_names])
-
-    def forward(self, x):
-        # 初始化 logits (预测分数)
-        ensemble_logits = 0
-
-        # 遍历每一个模型
-        for i, m in enumerate(self.models):
-            # 累加每个模型的预测结果
-            ensemble_logits += m(x)
-
-        # 取平均值 (除以模型数量)
-        # return ensemble_logits  # 其实直接返回总和也可以，梯度方向是一样的
-        return ensemble_logits / len(self.models)
-
-
 # ==========================================
 # 攻击算法
 # ==========================================
 
-# --- 噪声添加函数 ---
-def add_random_noise(x, noise_scale=0.1):
-    """
-    给输入张量添加高斯噪声
-    Args:
-        x: 输入图像 Tensor (Batch, C, H, W)
-        noise_scale: 噪声的强度系数
-    """
-    noise = torch.randn_like(x) * noise_scale
-    return x + noise
 
-
-# --- 1. FGSM (无噪声) ---
+# --- 1. FGSM  ---
 def fgsm(model, x, y, loss_fn, epsilon=epsilon):
     x_adv = x.detach().clone()
     x_adv.requires_grad = True
@@ -140,23 +120,7 @@ def fgsm(model, x, y, loss_fn, epsilon=epsilon):
     return x_adv
 
 
-def fgsm_noisy(model, x, y, loss_fn, epsilon=epsilon, noise_scale=0.1):
-    x_adv = x.detach().clone()
-    x_adv.requires_grad = True
-
-    # 【关键修改】：在计算梯度前，给输入加噪声
-    # 注意：我们希望基于有噪声的输入计算梯度，从而跳出局部极值点
-    x_noisy = add_random_noise(x_adv, noise_scale)
-
-    loss = loss_fn(model(x_noisy), y)  # 输入变成 noisy
-    loss.backward()
-
-    grad = x_adv.grad.detach()  # 获取对原图 x_adv 的梯度
-    x_adv = x_adv + epsilon * grad.sign()
-    return x_adv
-
-
-# --- 2. I-FGSM (无噪声) ---
+# --- 2. I-FGSM ---
 def ifgsm(model, x, y, loss_fn, epsilon=epsilon, alpha=alpha, num_iter=10):
     x_adv = x.detach().clone()
     for i in range(num_iter):
@@ -171,28 +135,7 @@ def ifgsm(model, x, y, loss_fn, epsilon=epsilon, alpha=alpha, num_iter=10):
     return x_adv
 
 
-def ifgsm_noisy(model, x, y, loss_fn, epsilon=epsilon, alpha=alpha, num_iter=10, noise_scale=0.1):
-    x_adv = x.detach().clone()
-    for i in range(num_iter):
-        x_adv.requires_grad = True
-
-        # 【关键修改】：每次迭代前加噪声
-        x_noisy = add_random_noise(x_adv, noise_scale)
-
-        # 计算 Loss 时使用的是加噪后的图，这有助于平滑梯度
-        outputs = model(x_noisy)
-        loss = loss_fn(outputs, y)
-        loss.backward()
-
-        grad = x_adv.grad.detach()
-        x_adv = x_adv + alpha * grad.sign()
-        delta = torch.clamp(x_adv - x, -epsilon, epsilon)
-        x_adv = x + delta
-        x_adv = x_adv.detach()
-    return x_adv
-
-
-# --- 3. MI-FGSM (无噪声 & 有噪声) ---
+# --- 3. MI-FGSM ---
 def mifgsm(model, x, y, loss_fn, epsilon=epsilon, alpha=alpha, num_iter=10, decay=1.0):
     x_adv = x.detach().clone()
     momentum = torch.zeros_like(x).detach().to(device)
@@ -215,18 +158,6 @@ def mifgsm(model, x, y, loss_fn, epsilon=epsilon, alpha=alpha, num_iter=10, deca
 
 
 def mifgsm_noisy(model, x, y, loss_fn, epsilon=epsilon, alpha=alpha, num_iter=10, decay=1.0, beta=1.5, N=5):
-    if N <= 0:
-        return mifgsm(
-            model,
-            x,
-            y,
-            loss_fn,
-            epsilon=epsilon,
-            alpha=alpha,
-            num_iter=num_iter,
-            decay=decay
-        )
-
     x_adv = x.detach().clone()
     momentum = torch.zeros_like(x).detach().to(device)
     for i in range(num_iter):
@@ -255,7 +186,7 @@ def mifgsm_noisy(model, x, y, loss_fn, epsilon=epsilon, alpha=alpha, num_iter=10
     return x_adv
 
 
-# --- 4. PGD (Projected Gradient Descent, 2018) ---
+# --- 4. PGD (Projected Gradient Descent, 2018,ICLR) ---
 # 特点：在 I-FGSM 的基础上加入了随机初始化 (Random Start)。
 def pgd(model, x, y, loss_fn, epsilon=epsilon, alpha=alpha, num_iter=10):
     x_adv = x.detach().clone()
@@ -293,7 +224,7 @@ def pgd(model, x, y, loss_fn, epsilon=epsilon, alpha=alpha, num_iter=10):
     return x_adv
 
 
-# --- 5. NI-FGSM (Nesterov Accelerated Gradient FGSM, 2020) ---
+# --- 5. NI-FGSM (Nesterov Accelerated Gradient FGSM, ICLR,2020) ---
 def nifgsm(model, x, y, loss_fn, epsilon=epsilon, alpha=alpha, num_iter=10, decay=1.0):
     x_adv = x.detach().clone()
     momentum = torch.zeros_like(x).detach().to(device)
@@ -355,6 +286,65 @@ def gra(model, x, y, loss_fn, epsilon=epsilon, alpha=alpha, num_iter=10, decay=1
         delta = torch.clamp(x_adv - x, -epsilon, epsilon)
         x_adv = x + delta
         x_adv = x_adv.detach()
+    return x_adv
+
+
+# --- 7. TI-FGSM (Translation-Invariant Attack, CVPR 2019) ---
+def ti(model, x, y, loss_fn, epsilon=epsilon, alpha=alpha, num_iter=5, decay=1.0, kernel_size=5):
+    x_adv = x
+    momentum = torch.zeros_like(x).detach().to(device)
+
+    for _ in range(num_iter):
+        x_adv = x_adv.detach().clone()
+        x_adv.requires_grad = True
+        loss = loss_fn(model(x_adv), y)
+        loss.backward()
+
+        grad1 = x_adv.grad.detach()
+        grad = ti_smooth(grad1, kernel_size=kernel_size)
+        grad = decay * momentum + grad / torch.mean(torch.abs(grad), dim=(1, 2, 3), keepdim=True)
+        momentum = grad
+
+        x_adv = x_adv + alpha * grad.sign()
+        delta = torch.clamp(x_adv - x, min=-epsilon, max=epsilon)
+        x_adv = torch.clamp(x + delta, min=0, max=1).detach()
+
+    return x_adv
+
+
+# 8. VIM（CVPR、2021）
+def vmi(model, x, y, loss_fn, alpha=alpha, num_iter=5, decay=1, N=2, beta=3 / 2, epsilon=epsilon):
+    x_adv = x
+    # initialze momentum tensor
+    momentum = torch.zeros_like(x).detach().to(device)
+    v = torch.zeros_like(x).detach().to(device)
+    for i in range(num_iter):
+        x_adv = x_adv.detach().clone()
+        x_adv.requires_grad = True  # need to obtain gradient of x_adv, thus set required grad
+        out = model(x_adv)
+        loss = loss_fn(out, y)
+        loss.backward()
+
+        grad1 = x_adv.grad.detach()
+        grad = decay * momentum + (grad1 + v) / torch.mean(torch.abs(grad1 + v), dim=(1, 2, 3), keepdim=True)
+        momentum = grad
+        # Calculate Gradient Variance
+        GV_grad = torch.zeros_like(x).detach().to(device)
+        for _ in range(N):
+            neighbor_images = x_adv.detach() + torch.randn_like(x).uniform_(-epsilon * beta,
+                                                                            epsilon * beta)  # ji 的把0.15改成
+            neighbor_images.requires_grad = True
+            out = model(neighbor_images)
+            cost = loss_fn(out, y)
+            cost.backward()
+            grad2 = neighbor_images.grad.detach()
+            GV_grad += grad2
+        # obtaining the gradient variance
+        v = GV_grad / N - grad1
+        x_adv = x_adv + alpha * grad.sign()
+        delta = torch.clamp(x_adv - x, min=-epsilon, max=epsilon)
+        x_adv = torch.clamp(x + delta, min=0, max=1).detach()
+    # x_adv = torch.max(torch.min(x_adv, x+epsilon), x-epsilon) # clip new x_adv back to [x-epsilon, x+epsilon]
     return x_adv
 
 
